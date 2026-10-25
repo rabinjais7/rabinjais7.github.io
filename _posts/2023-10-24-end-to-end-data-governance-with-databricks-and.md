@@ -1,6 +1,6 @@
 ---
 title: Dynamic Data Masking and Row Level Security on Databricks with Immuta
-date: 2026-10-24
+date: 2023-10-24
 author: Rabindra Jaiswal
 categories: [Data Engineering, Databricks, Data Governance]
 ---
