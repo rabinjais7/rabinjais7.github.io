@@ -1,6 +1,6 @@
-# Markdown Resume + Blog (GitHub Pages)
+# Recent Achievements + Blog (GitHub Pages)
 
-A simple Jekyll website for a resume, Markdown posts, and RSS. No server or database required.
+A simple Jekyll website for recent achievements, Markdown posts, and RSS. No server or database required.
 
 ## Add a blog post
 
@@ -24,7 +24,7 @@ Then commit and push. GitHub Pages automatically rebuilds the website, includes 
 2. In repository Settings → Pages, select **Deploy from a branch**, choose `main` and `/ (root)`.
 3. GitHub Pages will build the Jekyll site after each push. Check the Actions tab for deployment status.
 4. Edit `_config.yml` and replace `url` with your real site/domain URL.
-5. Add your PDF resume at `assets/resume.pdf`.
+5. Replace the sample certification and award entries on the Recent Achievements page with your own details.
 6. For a custom domain, configure it in Settings → Pages and follow GitHub's DNS instructions. If the domain currently hosts something else, use a subdomain such as `resume.example.com` to avoid disrupting it.
 
 ## Notes
