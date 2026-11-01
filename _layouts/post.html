@@ -1,0 +1,22 @@
+---
+layout: default
+---
+<article>
+  {{ content }}
+</article>
+<script>
+  const article = document.querySelector("article");
+  let title = article.querySelector("h1, h2");
+
+  if (!title) {
+    title = document.createElement("h1");
+    title.textContent = {{ page.title | jsonify }};
+    article.prepend(title);
+  }
+
+  const date = document.createElement("time");
+  date.className = "date";
+  date.dateTime = {{ page.date | date: "%Y-%m-%d" | jsonify }};
+  date.textContent = {{ page.date | date: "%B %-d, %Y" | jsonify }};
+  title.insertAdjacentElement("afterend", date);
+</script>
