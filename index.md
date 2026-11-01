@@ -8,7 +8,7 @@ title: Home
   <h1>Rabindra Jaiswal</h1>
   <h2>Data Architect &amp; Engineering Leader</h2>
   <p class="intro">I design and build modern data platforms, helping teams turn complex data systems into reliable, scalable products.</p>
-  <p><a class="button primary" href="{{ '/resume/' | relative_url }}">Recent achievements</a> <a class="button secondary" href="{{ '/blog/' | relative_url }}">Read the blog</a></p>
+  <p><a class="button primary" href="{{ '/achievement/' | relative_url }}">Recent achievements</a> <a class="button secondary" href="{{ '/blog/' | relative_url }}">Read the blog</a></p>
   <p class="muted">Microsoft Fabric · Databricks · Snowflake · Spark · Python</p>
 </section>
 <section class="section">

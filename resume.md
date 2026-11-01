@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Recent Achievements
-permalink: /resume/
+permalink: /achievement/
 description: Certifications, awards, and professional recognition.
 ---
 
