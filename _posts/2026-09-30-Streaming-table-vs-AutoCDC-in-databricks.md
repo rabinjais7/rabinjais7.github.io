@@ -1,5 +1,5 @@
 ---
-title: streaming_table_vs_auto_cdc_in_databricks
+title: Understanding streaming table use vs autoCDC in databricks
 date: 2026-09-30
 author: Rabindra Jaiswal
 categories: [Architecture, databricks]
