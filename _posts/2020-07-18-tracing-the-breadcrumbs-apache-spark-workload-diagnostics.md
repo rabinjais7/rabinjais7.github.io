@@ -1,5 +1,5 @@
 ---
-title: The Small Files Problem in Apache Spark: Why It Happens and How to Fix It
+title: The Small Files Problem in Apache Spark Why It Happens and How to Fix It
 date: 2020-07-18
 author: Rabindra Jaiswal
 categories: [Data Engineering, Apache Spark]

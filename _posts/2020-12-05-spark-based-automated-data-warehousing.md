@@ -1,5 +1,5 @@
 ---
-title: How Data Lakehouses Were Built: Spark, Hive and the Databricks Approach
+title: How Data Lakehouses Were Built Spark, Hive and the Databricks Approach
 date: 2020-12-05
 author: Rabindra Jaiswal
 categories: [Data Engineering, Apache Spark, Data Architecture]
