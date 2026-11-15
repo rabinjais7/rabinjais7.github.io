@@ -9,18 +9,6 @@ categories:
   - Delta Lake
 ---
 
-Here’s a cleaner, simpler rewrite in plain Indian English. I kept the Indian payments context, trimmed some long explanations, and made the tone sound more like you wrote it yourself.
-
----
-
-title: Why Data Lakes Become Swamps and How the Lakehouse Fixes Them  
-date: 2020-06-25  
-author: Rabindra Jaiswal  
-categories:  
-  - Data Engineering  
-  - Data Architecture  
-  - Apache Spark  
-  - Delta Lake  
 
 # Why Data Lakes Become Swamps and How the Lakehouse Fixes Them
 
