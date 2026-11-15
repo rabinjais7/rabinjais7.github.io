@@ -2,12 +2,12 @@
 title: The Small Files Problem in Apache Spark Why It Happens and How to Fix It
 date: 2020-07-18
 author: Rabindra Jaiswal
-categories: [Data Engineering, Apache Spark]
+categories: 
+  - Data Engineering
+  - Data Architecture
 ---
 
 ## The Small Files Problem in Apache Spark: Why It Happens and How to Fix It
-
-
 
 If you have worked with Spark on HDFS, S3, or any data lake for a while, you have almost certainly run into the small files problem. Jobs that used to be fast suddenly become slow, listing directories takes forever, and the NameNode (or S3 LIST calls) starts to struggle. 
 
