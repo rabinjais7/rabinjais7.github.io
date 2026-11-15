@@ -1,5 +1,5 @@
 ---
-title: Building a Resilient Data Lakehouse on Azure for Diverse Data Streams
+title: Data Quality in the Lakehouse Practical Ways to Keep Your Data Trustworthy
 date: 2024-07-31
 author: Rabindra Jaiswal
 categories:
@@ -10,158 +10,180 @@ categories:
   - Data Architecture
   - ETL
 ---
-# Building a Resilient Data Lakehouse on Azure for Diverse Data Streams
+## Data Quality in the Lakehouse: Practical Ways to Keep Your Data Trustworthy
 
-Modern data platforms must adeptly handle an increasing variety of data—from traditional batch sources to high-velocity streaming telemetry. Organisations often find themselves grappling with siloed data, complex integration challenges, and the perennial need for timely, accurate insights. The Azure Lakehouse platform, combining the scalability of data lakes with the structured capabilities of data warehouses, offers a robust solution for unifying these diverse data workflows. This architecture not only streamlines data ingestion and transformation but also prepares data efficiently for advanced analytics and machine learning.
+In a lakehouse, data comes from many sources and moves through multiple layers before it reaches reports, dashboards or machine learning models. If bad data enters the system, it can silently affect business decisions. That is why data quality is not optional — it must be built into the pipeline.
 
-Consider a practical scenario involving a fleet of industrial assets, such as wind turbines, spread across vast geographical areas. Capturing their operational data requires processing both historical maintenance records and real-time power output telemetry. The challenge lies in integrating these disparate data types into a cohesive, performant, and reliable system that can support everything from operational dashboards to predictive maintenance models. This article explores an end-to-end Azure-based Lakehouse pipeline designed to address such complexities, leveraging Azure Data Lake Storage (ADLS) Gen2, Azure Data Factory, Azure Databricks with Delta Lake, and Azure Synapse Analytics.
+In this post we will see practical ways to improve data quality on Databricks using Delta Lake and Delta Live Tables. The language is kept simple so anyone working with Spark can follow it.
 
-### Ingesting Diverse Data Streams: Batch and Real-time Foundations
+### Why Data Quality Matters in a Lakehouse
 
-The journey of data into the Lakehouse begins with ingestion from its various sources. ADLS Gen2 serves as the primary landing zone, offering exabyte-scale storage and hierarchical namespace capabilities essential for a data lake.
+A lakehouse stores both raw and curated data in the same place. Because of this flexibility, it is easy for null values, duplicates, wrong data types or unexpected values to enter the system. Once bad data reaches the Gold layer, fixing it becomes expensive.
 
-**Automated Batch Ingestion with Azure Data Factory and Auto Loader**
+Good data quality practices help you:
 
-For historical or periodically updated datasets, such as maintenance system records residing in a SQL Server database, Azure Data Factory (ADF) acts as the orchestration engine. ADF pipelines can be configured to incrementally ingest data into ADLS Gen2. A common, efficient method involves using `COPY` commands or data flow activities within ADF to move data from source databases to the landing zone in Parquet or CSV format.
+- Catch problems early
+- Stop bad records from moving forward
+- Keep a record of what failed and why
+- Make pipelines more reliable
 
-Once data lands in ADLS, Azure Databricks, powered by Auto Loader, takes over. Auto Loader is a crucial component for robust incremental data processing from cloud storage. Instead of manually tracking processed files, Auto Loader intelligently identifies new or modified files as they arrive in the configured directory. It excels at schema inference and evolution, handling changes in upstream data structures gracefully. This "cloud files" format, as it is often referred to in Databricks, simplifies what would otherwise be a complex task of managing file state and re-processing logic.
+### 1. Schema Enforcement with Delta Lake
 
-Here is a simplified Python example demonstrating Auto Loader reading Parquet files incrementally:
-
-```python
-# Configure Auto Loader to read new files from ADLS Gen2
-maintenance_header_df = (
-  spark.readStream
-    .format("cloudFiles")
-    .option("cloudFiles.format", "parquet")
-    .option("cloudFiles.schemaLocation", "/mnt/datalake/schemas/maintenance_headers") # For schema evolution
-    .load("/mnt/datalake/landing/maintenance_headers/")
-)
-
-# This DataFrame can then be written to a Delta Lake table
-# with a trigger once option for batch-like streaming execution.
-```
-
-The `trigger(once=True)` option allows a streaming query to process all available data and then shut down, effectively running a streaming job as a batch. This is particularly useful for controlled, scheduled incremental updates.
-
-**Real-time IoT Ingestion via Event Hubs and Spark Streaming**
-
-For real-time telemetry, such as live power output and weather data from wind turbines, Azure IoT Event Hubs provides a highly scalable ingress point. Event Hubs can handle millions of events per second, acting as a buffer and allowing downstream systems to consume data at their own pace.
-
-Azure Databricks connects directly to Event Hubs using its native Spark connector. This enables Spark Structured Streaming queries to consume messages in real-time, process them, and store them. Parsing raw JSON payloads from IoT devices into structured DataFrame columns is typically the first step.
+Delta Lake automatically checks the schema when you write data. If the incoming data does not match the table schema, the write fails. This is one of the simplest and most useful protections.
 
 ```python
-# Spark Structured Streaming from Azure Event Hubs
-eventhub_connection_string = "Endpoint=sb://..." # Replace with actual connection string
-eh_conf = {
-  "eventhubs.connectionString": spark.sparkContext._jvm.org.apache.spark.eventhubs.EventHubsUtils.encrypt(eventhub_connection_string),
-  "eventhubs.consumerGroup": "spark-cg"
-}
-
-raw_iot_df = (
-  spark.readStream
-    .format("eventhubs")
-    .options(**eh_conf)
-    .load()
-    .select(F.from_json(F.col("body").cast("string"), iot_schema).alias("data")) # Assuming iot_schema is defined
-    .select("data.*")
-)
-
-# This DataFrame now contains parsed IoT telemetry ready for transformation.
+# This will fail if the DataFrame has a different schema
+df.write.format("delta").mode("append").saveAsTable("silver.orders")
 ```
-This dual-pronged ingestion strategy ensures that both historical context and current operational data are captured efficiently, forming the robust Bronze layer of our Lakehouse.
 
-### Structuring Data with the Delta Lake Medallion Architecture
-
-Once data is ingested into ADLS, the next critical step is to refine and organise it into a usable format. The Medallion Architecture—comprising Bronze, Silver, and Gold layers—is a widely adopted pattern for structuring data within a Lakehouse, primarily powered by Delta Lake.
-
-*   **Bronze Layer:** This layer holds the raw, untransformed data directly ingested from sources. It serves as an immutable, append-only historical record, ensuring data lineage and replayability. Data here might be in its original format (e.g., raw JSON from IoT, Parquet from batch).
-*   **Silver Layer:** Data in this layer is cleaned, de-duplicated, validated, and enriched. It often involves merging related datasets, applying quality checks, and potentially joining batch data (like maintenance headers) with streaming data (like IoT telemetry). For streaming data, rolling aggregations (e.g., hourly averages of power output) are commonly calculated here to provide a slightly aggregated, but still granular, view for analysts. Delta Lake's `MERGE INTO` capability is invaluable here for handling `UPSERT` operations, ensuring data quality and managing slowly changing dimensions.
-*   **Gold Layer:** This is the consumption-ready layer, highly aggregated and optimised for specific business use cases such as business intelligence, machine learning, and advanced analytics. Data here is typically denormalised and focused on performance. For instance, a Gold layer table might contain daily aggregated turbine performance metrics, combining maintenance history with operational efficiency.
-
-Delta Lake is fundamental to this architecture. It brings ACID transactions, schema enforcement and evolution, time travel, and unified batch/streaming capabilities directly to the data lake. These features eliminate the data consistency issues often associated with traditional data lakes and simplify complex ETL operations.
-
-Consider a common operation in the Silver layer: enhancing batch-loaded maintenance data with real-time IoT readings.
+You can also control schema evolution:
 
 ```python
-# Example for a Silver layer transformation combining batch and streaming
-# Assuming 'maintenance_batch_df' from Auto Loader (Bronze) and 'iot_stream_df' (Bronze)
-# This snippet would be part of a structured streaming query writing to Silver.
-
-enriched_turbine_data_stream = iot_stream_df.alias("iot") \
-  .join(maintenance_batch_df.alias("maint"),
-        F.col("iot.turbine_id") == F.col("maint.turbine_id"),
-        "left_outer") \
-  .select(...) # Select and transform relevant columns
-
-# Write to Silver Delta table with watermarking and checkpointing
-(enriched_turbine_data_stream.writeStream
-  .format("delta")
-  .option("checkpointLocation", "/mnt/datalake/checkpoints/silver_enriched_turbines")
-  .trigger(processingTime="1 minute") # Or trigger(once=True) for batch
-  .toTable("silver_db.enriched_turbines"))
+# Allow new columns to be added
+df.write.format("delta") \
+  .option("mergeSchema", "true") \
+  .mode("append") \
+  .saveAsTable("silver.orders")
 ```
 
-For the Gold layer, high-level aggregations are created. For example, a daily summary of turbine operational status might be generated and stored:
+Use schema enforcement in Bronze and Silver layers so unexpected columns or type mismatches are caught early.
+
+### 2. Table Constraints (NOT NULL and CHECK)
+
+Delta Lake supports `NOT NULL` and `CHECK` constraints. These are checked at write time.
 
 ```sql
--- SQL example for Gold layer aggregation
-CREATE OR REPLACE TABLE gold_db.daily_turbine_summary
-USING DELTA
-AS
-SELECT
-  DATE_TRUNC('day', timestamp) AS report_date,
-  turbine_id,
-  AVG(power_output_kw) AS avg_daily_power_output_kw,
-  MAX(vibration_level) AS max_daily_vibration,
-  COUNT(DISTINCT maintenance_event_id) AS daily_maintenance_events
-FROM silver_db.enriched_turbines
-GROUP BY 1, 2;
+-- Create table with constraints
+CREATE TABLE silver.customers (
+  customer_id   BIGINT NOT NULL,
+  email         STRING,
+  age           INT,
+  CONSTRAINT valid_age CHECK (age >= 0 AND age <= 120),
+  CONSTRAINT valid_email CHECK (email LIKE '%@%.%')
+) USING DELTA;
+
+-- Add constraint on existing table
+ALTER TABLE silver.orders 
+ADD CONSTRAINT positive_amount CHECK (order_amount > 0);
 ```
-This methodical layering ensures data quality, governance, and efficient access for various downstream consumers.
 
-### Downstream Serving and Analytics with Azure Synapse Analytics
+If any row violates the constraint, the entire write fails. This is useful for critical columns such as primary keys, amounts and dates.
 
-While Delta Lake in Databricks provides a powerful platform for data science and complex analytics, specific use cases, such as high-concurrency, low-latency business intelligence (BI) dashboards, often benefit from a dedicated serving layer. Azure Synapse Analytics Dedicated SQL Pools are engineered precisely for these scenarios.
+### 3. Data Quality with Delta Live Tables Expectations
 
-Integrating Databricks with Synapse allows publishing curated Gold layer data to a Synapse Dedicated SQL Pool. This enables BI tools like Power BI to connect directly to Synapse for rapid query execution, without impacting the analytical workloads running on Databricks. Azure Databricks offers a high-performance connector to Synapse, supporting both batch and streaming updates to keep the Synapse tables synchronised with the Lakehouse Gold layer.
+Delta Live Tables (DLT) makes data quality easier with **Expectations**. An expectation is a simple SQL condition. You can decide what should happen when a record fails the condition:
 
-The decision to duplicate data into Synapse involves a trade-off. While it adds a layer of data movement and potential consistency challenges if not managed well, it offloads the intense query workload from the data lake, dedicating resources for optimal BI performance. This architecture acknowledges that no single platform perfectly serves all data access patterns.
+- **Warn** (default) — keep the record and just record the failure
+- **Drop** — remove the bad record
+- **Fail** — stop the pipeline
 
-An example of writing to Synapse from Databricks:
+**Python example:**
 
 ```python
-# Writing a Gold layer DataFrame to Synapse Dedicated SQL Pool
-# Make sure Synapse connection details are configured (e.g., via secrets)
-(spark_session.table("gold_db.daily_turbine_summary") # Read from Gold Delta table
-  .write
-  .format("com.databricks.spark.synapse") # Using the Databricks Synapse connector
-  .option("url", "jdbc:sqlserver://<synapse-server>.sql.azuresynapse.net:1433;database=<synapse-db>")
-  .option("tempDir", "/mnt/datalake/synapse_temp") # Temporary staging for data transfer
-  .option("user", "<synapse-user>")
-  .option("password", "<synapse-password>")
-  .option("dbtable", "dbo.DailyTurbineSummary")
-  .mode("overwrite") # Or "append" with proper merge logic for streaming updates
-  .save())
+import dlt
+
+@dlt.table
+@dlt.expect("valid_order_id", "order_id IS NOT NULL")
+@dlt.expect_or_drop("positive_amount", "order_amount > 0")
+@dlt.expect_or_fail("valid_status", "status IN ('NEW', 'SHIPPED', 'DELIVERED')")
+def silver_orders():
+  return spark.readStream.table("bronze.orders")
 ```
-For continuous updates to Synapse, a streaming write with `merge` semantics or a scheduled batch overwrite within an ADF pipeline would maintain data freshness.
 
-### Operational Excellence and Debugging Considerations
+**SQL example:**
 
-Building such an end-to-end pipeline demands meticulous attention to operational details and a clear debugging strategy.
+```sql
+CREATE OR REFRESH STREAMING TABLE silver_orders (
+  CONSTRAINT valid_order_id EXPECT (order_id IS NOT NULL),
+  CONSTRAINT positive_amount EXPECT (order_amount > 0) ON VIOLATION DROP ROW,
+  CONSTRAINT valid_status EXPECT (status IN ('NEW', 'SHIPPED', 'DELIVERED')) ON VIOLATION FAIL UPDATE
+)
+AS SELECT * FROM STREAM(bronze.orders);
+```
 
-**Monitoring and Orchestration:** Azure Data Factory's monitoring tools provide a unified view of pipeline execution, activity status, and potential failures. Within Databricks, job logs, Spark UI, and Delta Lake `DESCRIBE HISTORY` commands offer deeper insights into query performance, data quality, and schema changes. Setting up alerts for failed ADF activities or stalled Databricks streams is crucial.
+DLT shows quality metrics in the pipeline UI and stores them in the event log, so you can monitor how many records are failing over time.
 
-**Data Quality and Validation:** Implementing data quality checks at each medallion layer is paramount. For instance, in the Silver layer, validate turbine IDs against a master list. In the Gold layer, ensure aggregations are within expected ranges. Delta Lake's schema enforcement helps prevent malformed data from corrupting tables, but robust validation logic implemented via Spark transformations is still necessary.
+### 4. Quarantine Pattern (Recommended Approach)
 
-**Performance Tuning:** Optimising Spark jobs within Databricks involves correctly sizing clusters, choosing appropriate data partitioning strategies, and leveraging Delta Lake caching. For streaming jobs, managing micro-batch intervals, checkpointing locations, and watermarking for late-arriving data are key to performance and correctness.
+Instead of dropping bad records or failing the whole pipeline, many teams send bad records to a separate quarantine table. This way nothing is lost and you can investigate later.
 
-**Common Pitfalls and Debugging:**
-*   **Auto Loader Schema Evolution:** If `cloudFiles.schemaLocation` is not managed correctly, schema changes in source files might lead to data ingestion failures. Monitor the schema directory for unexpected changes.
-*   **Event Hubs Consumer Groups:** Ensure each Spark streaming job uses a distinct consumer group to avoid competition for messages. Data loss or reprocessing can occur otherwise.
-*   **Data Consistency:** Maintaining eventual consistency between Delta Lake Gold tables and Synapse requires careful consideration of update frequency and transactionality. Mismatches can often be traced to failed data transfers or differing update logic.
-*   **Spark Job Failures:** Always check Databricks job logs first. Look for StackOverflow errors, memory issues, or specific exceptions related to data parsing or network connectivity. The Spark UI (accessible from Databricks job runs) offers granular detail on stage failures and task performance.
+```python
+from pyspark.sql.functions import col, when, current_timestamp
 
-This comprehensive architectural approach, from raw ingestion to curated serving layers, ensures that organisations can extract maximum value from their diverse data assets. It enables agility, scalability, and resilience, which are non-negotiable in today's data-intensive landscape. The power of a unified Lakehouse on Azure lies not just in its components but in their seamless integration, allowing batch and streaming data to converge and drive informed decision-making.
+def apply_quality_checks(df):
+    return df.withColumn(
+        "quality_issue",
+        when(col("order_id").isNull(), "missing_order_id")
+        .when(col("order_amount") <= 0, "invalid_amount")
+        .when(~col("status").isin("NEW", "SHIPPED", "DELIVERED"), "invalid_status")
+        .otherwise(None)
+    )
 
-Originally posted at [Medium](https://medium.com/@rabinjais7/building-a-resilient-data-lakehouse-on-azure-for-diverse-data-streams)
+raw_df = spark.readStream.table("bronze.orders")
+checked_df = apply_quality_checks(raw_df)
+
+# Good records
+good_df = checked_df.filter(col("quality_issue").isNull())
+# Bad records
+bad_df = checked_df.filter(col("quality_issue").isNotNull()) \
+                   .withColumn("quarantine_time", current_timestamp())
+
+# Write good data to silver
+good_df.writeStream.format("delta").option("checkpointLocation", "/tmp/chk_good") \
+       .toTable("silver.orders")
+
+# Write bad data to quarantine
+bad_df.writeStream.format("delta").option("checkpointLocation", "/tmp/chk_bad") \
+      .toTable("quarantine.orders")
+```
+
+This pattern works well with both batch and streaming jobs.
+
+### 5. Quality Checks Across Medallion Layers
+
+A practical approach is to apply different levels of quality checks at each layer:
+
+- **Bronze**: Basic checks only (schema, not null on key columns). Keep almost everything so you can reprocess if needed.
+- **Silver**: Stronger checks (ranges, allowed values, uniqueness). Use drop or quarantine for bad records.
+- **Gold**: Very strict checks. Prefer fail-fast so business users never see bad data.
+
+Example uniqueness check before writing to Gold:
+
+```python
+from pyspark.sql.functions import count
+
+duplicate_check = df.groupBy("order_id").agg(count("*").alias("cnt")) \
+                    .filter(col("cnt") > 1)
+
+if duplicate_check.count() > 0:
+    raise Exception("Duplicate order_ids found. Stopping pipeline.")
+```
+
+### 6. Monitoring and Debugging
+
+- Use DLT event log to track expectation failures over time.
+- Use Delta time travel to see what the data looked like before a bad load:
+
+```sql
+SELECT * FROM silver.orders VERSION AS OF 15;
+-- or
+SELECT * FROM silver.orders TIMESTAMP AS OF '2023-05-10T10:00:00';
+```
+
+- Maintain a simple quality metrics table that stores daily pass/fail counts.
+
+### Summary of Practical Techniques
+
+| Technique                  | Best Used In     | What It Does                          | Action on Bad Data      |
+|---------------------------|------------------|---------------------------------------|-------------------------|
+| Schema Enforcement        | All layers       | Blocks wrong schema                   | Fails write             |
+| CHECK / NOT NULL          | Silver / Gold    | Enforces business rules               | Fails write             |
+| DLT Expectations          | DLT pipelines    | Declarative quality rules             | Warn / Drop / Fail      |
+| Quarantine Pattern        | Batch & Streaming| Separates good and bad records        | Moves bad to side table |
+| Custom Spark Checks       | Any job          | Flexible validation logic             | Your choice             |
+
+### Final Thoughts
+
+Data quality in a lakehouse works best when it is applied at multiple points rather than only at the end. Start with schema enforcement and simple constraints, then add DLT Expectations or a quarantine pattern for more control. The goal is to stop bad data as early as possible while still keeping enough information to debug issues later.
+
+Once these checks are in place, your Silver and Gold tables become much more trustworthy for reporting and downstream systems.

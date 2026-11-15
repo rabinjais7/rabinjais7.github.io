@@ -1,249 +1,156 @@
 ---
-title: Deep Dive into Spark Diagnostics Unmasking Regressions and Indefinite Job Hangs
+title: The Small Files Problem in Apache Spark: Why It Happens and How to Fix It
 date: 2020-07-18
 author: Rabindra Jaiswal
 categories: [Data Engineering, Apache Spark]
 ---
 
-# Deep Dive into Spark Diagnostics Unmasking Regressions and Indefinite Job Hangs
+## The Small Files Problem in Apache Spark: Why It Happens and How to Fix It
 
-Every data engineer running Apache Spark in production has lived through this scenario. You have a critical reconciliation pipeline—say, matching daily UPI transaction logs from local payment switches against settlement files from banks and the National Payments Corporation of India (NPCI). For months, this pipeline finishes smoothly within forty-five minutes. Then one morning, either after a minor cluster runtime upgrade or after an unexpected surge in transaction volume during a festive sale, the job misbehaves. 
 
-Sometimes it runs twice as slow with no obvious code change. Other times, it shoots through the first 95 percent of the stages in twenty minutes, and then grinds to a dead halt on the final write stage. Two tasks out of thousands remain stuck indefinitely, consuming cluster budget while the monitoring dashboard shows flatlined CPU utilization.
 
-Distributed systems fail in subtle ways. When an application runs across hundreds of virtual machines, diagnostic telemetry gets fragmented across driver logs, executor stderr files, yarn containers, and storage metrics. To resolve these failures, you cannot rely on guesswork or blind config tweaking like increasing executor memory. You must follow the breadcrumbs from high-level query plans down to executor CPU profiling, Linux network sockets, and JVM runtime internals.
+If you have worked with Spark on HDFS, S3, or any data lake for a while, you have almost certainly run into the small files problem. Jobs that used to be fast suddenly become slow, listing directories takes forever, and the NameNode (or S3 LIST calls) starts to struggle. 
 
----
+This post explains what the small files problem actually is, why Spark creates it so easily, and the practical ways to fix it.
 
-### Isolating Performance Regressions: Catalyst versus the JVM Hot Loop
+### What Is the Small Files Problem?
 
-When a query experiences performance regression, the first impulse is often to inspect resource allocation. However, the root cause usually splits into two possibilities: either the Catalyst optimizer selected a different execution strategy, or the underlying JVM bytecode execution path degraded despite an identical plan.
+In distributed storage systems, each file has metadata associated with it. On HDFS this metadata lives in the NameNode. On object stores like S3, every file listing and open operation has a cost. When you have millions of tiny files (a few MB or less), two things happen:
 
-#### 1. Checking the Physical Plan
-The easiest starting point is running an `EXPLAIN EXTENDED` on both the old and new executions.
+1. **Metadata overhead explodes** — listing a directory or opening files becomes expensive.
+2. **Processing becomes inefficient** — Spark creates one task per file (or per split). Thousands of tiny tasks mean huge scheduling overhead, poor I/O utilization, and under-used executors.
+
+The ideal file size for most analytical workloads is roughly **128 MB to 1 GB**. Files much smaller than that waste resources; files much larger than that can cause memory pressure or reduce parallelism.
+
+### Why Spark Creates Small Files So Easily
+
+Spark writes one output file per partition (task) by default. Several common patterns produce too many partitions:
+
+- High parallelism settings (`spark.sql.shuffle.partitions` defaulted to 200, and many people set it even higher).
+- Frequent small writes (streaming micro-batches, frequent incremental loads).
+- Over-partitioning with high-cardinality columns (`partitionBy` on user_id, session_id, etc.).
+- Writing after filters or aggregations that leave many partitions almost empty.
+- Each task writing into every partition directory when you use `partitionBy`.
+
+The result is thousands or millions of small Parquet/ORC files that make subsequent reads painful.
+
+### How to Fix It
+
+#### 1. Control the Number of Output Files with `coalesce` or `repartition`
+
+```python
+# Reduce to a reasonable number of files before writing
+df.coalesce(20).write.mode("overwrite").parquet("s3://bucket/output/")
+
+# Or use repartition when you also want to rebalance data
+df.repartition(50).write.mode("overwrite").parquet("s3://bucket/output/")
+```
+
+**When to use which:**
+- Prefer **`coalesce(n)`** when you only need to reduce the number of partitions (cheaper — no full shuffle).
+- Use **`repartition(n)`** when partitions are skewed or you want even distribution (costs a shuffle).
+
+You can also use SQL hints (Spark 2.4+):
 
 ```sql
--- Check physical plan shifts between runs
-EXPLAIN EXTENDED
-SELECT 
-    m.merchant_id, 
-    m.vpa, 
-    count(t.txn_id) as txn_count, 
-    sum(t.amount) as total_settled
-FROM upi_transactions t
-JOIN merchant_master m ON t.merchant_id = m.merchant_id
-WHERE t.txn_date = '2020-07-17'
-GROUP BY m.merchant_id, m.vpa;
+INSERT OVERWRITE TABLE target
+SELECT /*+ COALESCE(20) */ * FROM source;
 ```
 
-Look closely at join nodes and exchange operators. If Catalyst switches a `BroadcastHashJoin` (BHJ) to a `SortMergeJoin` (SMJ), query latency can jump by orders of magnitude. This often happens when:
-- Adaptive Query Execution (AQE) is disabled or behaves differently on data with skewed statistics.
-- Dynamic partition pruning fails to fire due to subtle filter changes.
-- The underlying table statistics on disk shifted past `spark.sql.autoBroadcastJoinThreshold`.
-
-If the physical plan is unchanged, the regression is not an optimization or planner problem. It stems from execution delays: JIT compilation issues, task scheduling latency, garbage collection pauses, or hidden CPU inefficiencies in generated bytecode.
-
-#### 2. Profiling Executors with Async Profiler and Flame Graphs
-To find out why an unchanged plan runs slower on the executor, you need to pull the problem out of the distributed cluster and isolate it on a single executor process. 
-
-Using `async-profiler` avoids the classic safepoint bias introduced by standard Java thread dumps. By sampling CPU instructions and kernel call stacks directly via `perf_events`, you can generate Flame Graphs that highlight exact bottlenecks in the execution path.
-
-```bash
-# Attach async-profiler to a running Spark executor JVM (PID 48210) for 60 seconds
-./profiler.sh -d 60 -e cpu -f /tmp/executor_perf.svg 48210
-```
-
-When comparing Flame Graphs between an older, faster runtime and a regressed runtime on heavy aggregation workloads, you will often find unexpected JIT deoptimizations. 
-
-Consider how Spark's Whole-Stage Code Generation (`GenCode`) functions. Inside aggregate iterations, Spark generates tight Java loops to update accumulator buffers. In an optimized run, the JVM JIT compiler (C2) detects a monomorphic call site—the loop repeatedly calls the exact same implementation method. The compiler inlines this call, holds variables in CPU registers, and eliminates intermediate buffer copies.
-
-```java
-/* Conceptual representation of inlined monomorphic aggregation path */
-while (inputRecords.hasNext()) {
-    InternalRow row = inputRecords.next();
-    // Fast path: Inlined direct primitive update, zero heap allocations
-    buffer.updateLong(0, buffer.getLong(0) + row.getLong(1));
-}
-```
-
-If a patch or library change introduces an interface indirection or alternate class path within that loop, the call site turns bimorphic or megamorphic. The JVM can no longer inline the invocation. It drops back to a vtable call dispatch, forcing Spark to instantiate wrapper objects and copy memory between intermediate internal row buffers. 
-
-On a dataset of two hundred million transaction records, adding a single heap allocation and an indirect method call inside the loop adds tens of minutes of CPU overhead. You will not see this in the Spark UI SQL tab; it only appears as wide, flat method call plateaus on an executor CPU Flame Graph.
-
----
-
-### Diagnosing the 95% Job Hang: Silent Tasks and Shuffle Timeouts
-
-A common frustration in Spark administration is the silent cluster stall. A job processes input data rapidly, shuffles partitions, and then hangs. You open the Spark Web UI:
-- Total tasks: 2000
-- Completed: 1998
-- Active: 2
-- CPU usage across worker nodes drops near 0%.
-
-The instinct is to assume a deadlock or a hung driver. But often, the cluster is quietly waiting on network retries.
-
-#### The Dead Executor Shuffle Trap
-Consider a large UPI reconciliation job where Stage 2 needs to fetch shuffle partitions generated by Stage 1. 
-
-1. **The Trigger Event:** One executor (say, Executor 29) dies due to a spot node eviction or an unrecoverable node hardware failure.
-2. **The Active Stage State:** The remaining nodes are currently running a heavy stage with 2,000 tasks that fully saturates all assigned cores on the cluster.
-3. **The Connection Lock:** Active tasks on other executors need shuffle data that was hosted on Executor 29. They attempt to establish a TCP connection to fetch their assigned blocks.
-
-Spark’s Netty transport layer relies on two key configuration properties:
-- `spark.shuffle.io.maxRetries` (default: 3)
-- `spark.shuffle.io.retryWait` (default: 5s, but often configured to 60s or 120s in slow networks)
-
-When Executor 29 disappears without sending an explicit TCP RST packet, clients must wait for connection timeouts before failing over:
-
-$$\text{Total Stall Time} = \text{maxRetries} \times \text{retryWait}$$
-
-If `retryWait` is configured to 120 seconds and retries are set to 3, an executor thread will wait silently for 360 seconds per attempt cycle before reporting the fetch failure to the driver.
+**Rule of thumb:** Aim for output files in the 128 MB – 1 GB range. Calculate roughly:
 
 ```
-20/07-18 11:14:02 WARN TransportChannelHandler: Exception in connection from /10.0.4.12:43212
-java.io.IOException: Connection reset by peer
-20/07-18 11:16:02 ERROR ShuffleBlockFetcherIterator: Failed to fetch block shuffle_0_29_0, retrying (1/3)
-20/07-18 11:18:02 ERROR ShuffleBlockFetcherIterator: Failed to fetch block shuffle_0_29_0, retrying (2/3)
+number_of_files ≈ total_data_size / target_file_size
 ```
 
-During this window, those remaining active tasks occupy executor task slots. If those tasks hold all available CPU cores on the cluster, the scheduler cannot dispatch any new corrective tasks. 
+#### 2. Be Careful with `partitionBy`
 
-To the engineer looking at the UI, no new log messages appear because Spark suppresses repeated stack traces during active retry intervals. The cluster appears completely hung, even though it is simply observing configured protocol back-off rules.
+```python
+# This can create many small files (one per task × number of partitions)
+df.write.partitionBy("date", "region").parquet("s3://bucket/output/")
 
-#### Verifying via Log Event Distribution
-To confirm whether a cluster is deadlocked or cycling through timeouts, ingest executor driver logs into an analytical query format (such as Parquet or Delta tables) and aggregate message frequencies by minute:
+# Better: repartition by the partition columns first
+df.repartition("date", "region") \
+  .write \
+  .partitionBy("date", "region") \
+  .parquet("s3://bucket/output/")
+```
+
+Also avoid partitioning on high-cardinality columns.
+
+#### 3. Use `maxRecordsPerFile` (or similar)
+
+```python
+df.write \
+  .option("maxRecordsPerFile", 1000000) \
+  .parquet("s3://bucket/output/")
+```
+
+This prevents individual files from becoming too large while still controlling the overall number.
+
+#### 4. Compaction Jobs (Periodic Rewrite)
+
+For tables that already have many small files, run a periodic compaction job:
+
+```python
+# Simple compaction
+spark.read.parquet("s3://bucket/table/") \
+  .coalesce(50) \
+  .write \
+  .mode("overwrite") \
+  .parquet("s3://bucket/table_compacted/")
+```
+
+Then swap the paths (or use a table format that supports atomic swaps).
+
+#### 5. Delta Lake OPTIMIZE 
+
+If you are using Delta Lake (open-sourced in 2019 and already popular on Databricks by 2020), the `OPTIMIZE` command is the cleanest way to compact files:
+
+```python
+from delta.tables import DeltaTable
+
+delta_table = DeltaTable.forPath(spark, "s3://bucket/delta_table")
+delta_table.optimize().executeCompaction()
+```
+
+Or in SQL:
 
 ```sql
-SELECT 
-    window(log_timestamp, '1 minute') as log_window,
-    executor_id,
-    count(*) as event_count
-FROM spark_cluster_logs
-WHERE log_timestamp BETWEEN '2020-07-18 11:10:00' AND '2020-07-18 11:30:00'
-GROUP BY 1, 2
-ORDER BY 1 ASC;
+OPTIMIZE delta.`s3://bucket/delta_table`;
+-- Or only specific partitions
+OPTIMIZE delta.`s3://bucket/delta_table` WHERE date = '2020-10-01';
 ```
 
-A truly deadlocked cluster produces a flat line of zero logs across all nodes. A cluster dealing with network retries will show rhythmic spikes occurring at exact intervals (e.g., every 60 or 120 seconds) matching `spark.shuffle.io.retryWait`.
+Delta Lake’s OPTIMIZE uses bin-packing to combine small files into larger ones (targeting ~1 GB by default). This was one of the strongest practical reasons many teams adopted Delta Lake around that time.
 
----
+### Streaming Considerations
 
-### Low-Level Socket Introspection: CLHSDB and Native Debugging
+Streaming jobs (Structured Streaming) are especially prone to small files because each micro-batch writes new files.
 
-There are scenarios where an executor task is not retrying, but is genuinely frozen. This is common during the final write stage when Spark tasks commit output files to cloud object stores or remote databases via JDBC.
+Practical approaches:
+- Increase the trigger interval so each micro-batch processes more data.
+- Use `foreachBatch` and apply `coalesce`/`repartition` inside the batch function before writing.
+- Run a separate compaction job on the output path periodically.
+- Prefer Delta Lake as the sink so you can later run `OPTIMIZE` easily.
 
-#### Inspecting the Thread Dump
-A thread dump taken from the Spark UI shows a worker thread stuck in socket reads:
+### Monitoring and Prevention
 
-```
-"Executor task launch worker-7" daemon prio=5 tid=0x00007f9c8402a800 nid=0x5c43 runnable
-   java.lang.Thread.State: RUNNABLE
-        at java.net.SocketInputStream.socketRead0(Native Method)
-        at java.net.SocketInputStream.socketRead(SocketInputStream.java:116)
-        at java.net.SocketInputStream.read(SocketInputStream.java:171)
-        at sun.security.ssl.InputRecord.read(InputRecord.java:535)
-        at sun.security.ssl.SSLSocketImpl.readRecord(SSLSocketImpl.java:975)
-        ...
-        at com.amazonaws.services.s3.model.PutObjectResult.<init>(...)
-```
+- Check the number of files and average file size regularly (using `spark.read.parquet(...).inputFiles.length` or storage listing).
+- Set up alerts when the number of files in a partition exceeds a threshold.
+- Document target file sizes in your team’s standards.
+- Prefer writing larger batches over many tiny ones when latency allows it.
 
-The thread is waiting on network I/O from a remote storage endpoint. But is the connection dead, waiting for data, or dropped by a middlebox firewall?
+### Summary
 
-First, verify the OS-level socket state using `netstat` or `ss` on the host machine:
+| Approach                        | Best For                          | Cost          | Notes                          |
+|--------------------------------|-----------------------------------|---------------|--------------------------------|
+| `coalesce(n)` before write     | Reducing files, balanced data     | Low           | No full shuffle                |
+| `repartition(n)` before write  | Skewed data or rebalancing        | Higher        | Full shuffle                   |
+| Careful `partitionBy`          | Hive-style partitioning           | Medium        | Repartition by key first       |
+| Periodic compaction job        | Existing tables with small files  | Medium        | Run off-peak                   |
+| Delta Lake `OPTIMIZE`          | Delta tables                      | Medium        | Cleanest long-term solution    |
 
-```bash
-# Check socket state and TCP timer on the host
-netstat -tonp | grep 0x5c43
-# Or match by remote endpoint port (e.g., S3/HTTPS 443)
-ss -ntoi '( dport = :443 )'
-```
+The small files problem is almost inevitable if you do not design for it, but it is also very solvable. Controlling the number of partitions before you write, avoiding over-partitioning, and running compaction (or using Delta Lake’s OPTIMIZE).
 
-If `netstat` outputs `ESTABLISHED` with timer `off`, the Linux kernel believes the TCP connection is still valid, but no packets are flowing. If a cloud gateway or intermediate firewall silently drops the TCP session without sending a FIN/RST packet, the client machine will maintain that half-open socket indefinitely unless a read timeout or TCP keep-alive probe terminates it.
-
-#### Deep Inspection with HotSpot Debugger (`clhsdb`)
-To prove that the JVM has lost track of the connection state, you can inspect the actual Java heap references inside the running JVM using the HotSpot Serviceability Agent (`clhsdb` or `jhsdb clhsdb` in newer JDKs).
-
-Attach `jhsdb` directly to the hung executor JVM process without killing it:
-
-```bash
-jhsdb clhsdb --pid 48210
-```
-
-Inside the debugger shell, you can execute JavaScript expressions against internal HotSpot C++ metadata using `jseval`. This lets you traverse thread stack frames down to the specific `Socket` and `FileDescriptor` instances:
-
-```text
-hsdb> threads
-# Locate the OS thread ID corresponding to the blocked worker (e.g., Thread 4)
-
-hsdb> thread 4
-# Inspect stack frames for Thread 4
-
-hsdb> jseval "
-  var thread = sa.threads.getThreadForOSId(0x5c43);
-  var frame = thread.getCurrentFrame();
-  // Traverse down to find SocketInputStream instance
-  var socketStream = ...;
-  output.println(socketStream.impl.port);
-  output.println(socketStream.impl.timeout);
-"
-```
-
-Inspecting the underlying `SocksSocketImpl` instance often reveals the culprit:
-
-```text
-port = 443
-localport = 36332
-timeout = 0
-```
-
-A `timeout` value of `0` in Java socket implementations means infinite timeout. If the client HTTP client (such as an unconfigured AWS SDK or custom REST sink) initializes its HTTP connection pool with default socket settings, it leaves read timeouts set to zero. If the endpoint stops responding mid-payload, the executor task will block forever. The Spark driver has no way to break this lock because the thread is formally classified as running, not failed.
-
-#### Corroborating via GDB Native Frames
-You can verify the same state using GDB against the Java process. Modern OpenJDK builds preserve native symbols that allow mixed-mode stack traces:
-
-```bash
-gdb -p 48210
-(gdb) apply-all-threads bt
-```
-
-Scanning the native backtrace for the blocked thread will point directly to the blocking system call:
-
-```c
-#0  0x00007f9d1234a2cd in __libc_recv (fd=84, buf=0x7f9c78045610, len=8192, flags=0)
-#1  0x00007f9d045621a3 in NET_Read (fd=84, buf=0x7f9c78045610, len=8192)
-#2  0x00007f9cf823190b in Java_java_net_SocketInputStream_socketRead0 (...)
-```
-
-By querying file descriptor 84 (`fd=84`) directly through Linux `/proc`:
-
-```bash
-ls -l /proc/48210/fd/84
-# lrwx------ 1 spark spark 64 Jul 18 12:00 /proc/48210/fd/84 -> socket:[1245892]
-```
-
-You cross-reference the socket inode `[1245892]` with `/proc/net/tcp` to obtain the definitive proof: the JVM is stuck in a synchronous `read()` call on a socket whose remote gateway disconnected hours ago.
-
----
-
-### Engineering Guardrails for Resilient Pipelines
-
-Deep diagnostics are necessary when things fail, but architecture changes can prevent these failure modes from occurring in the first place.
-
-| Diagnostic Area | Failure Symptom | Detection Tool | Preventative Configuration |
-| :--- | :--- | :--- | :--- |
-| **Execution Loop** | 2-3x runtime jump, unchanged physical plan | `async-profiler` Flame Graphs | Avoid polymorphic interfaces inside custom UDFs; ensure primitive data types avoid boxing in aggregation columns. |
-| **Shuffle Recovery** | Full cluster stalls during executor replacement | Metric aggregation on logs via Delta Lake | Set `spark.shuffle.io.maxRetries = 3` and decrease `spark.shuffle.io.retryWait = 15s` (down from 60s+). |
-| **Sink/Storage I/O** | Jobs hung at 99% in final commit stage | `jhsdb clhsdb`, `netstat -tonp` | Explicitly set client timeouts (e.g., `fs.s3a.connection.timeout = 50000`, `fs.s3a.attempts.maximum = 3`). |
-
-#### Operational Checklist
-1. **Never Allow Unbounded Socket Timeouts:** Any downstream service invoked by tasks—whether an external merchant lookup API, an HBase cluster, or an S3/ADLS object store—must have an explicit `readTimeout` and `connectionTimeout`. Defaulting to zero invites permanent task hangs.
-2. **Configure Kernel Keep-Alives:** Ensure the underlying operating system images running Spark workers have reasonable TCP keep-alive settings in `/etc/sysctl.conf`:
-   ```ini
-   net.ipv4.tcp_keepalive_time = 300
-   net.ipv4.tcp_keepalive_intvl = 15
-   net.ipv4.tcp_keepalive_probes = 5
-   ```
-   This ensures that dropped connections are terminated at the OS layer within minutes rather than surviving indefinitely.
-3. **Audit Plan Transformations:** When upgrading Spark versions, do not rely solely on automated integration tests passing. Run benchmark queries against sampled production data and verify that Catalyst has preserved expected join types and code-generation blocks across versions.
-
-Distributed systems engineering requires diagnosing problems at every layer of the abstraction stack. When a high-scale data pipeline stalls, the problem can hide in an optimizer heuristic, a Netty timeout calculation, or a native socket read flag inside the JVM. Knowing how to peel back these layers systematically is what keeps mission-critical platforms reliable.
+Once you get file sizes into a healthy range, both job runtime and query performance improve significantly — and the operations team stops getting paged about slow directory listings.
