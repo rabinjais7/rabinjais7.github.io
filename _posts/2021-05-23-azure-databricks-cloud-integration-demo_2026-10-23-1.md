@@ -9,8 +9,10 @@ categories:
   - Delta Lake
   - Data Architecture
   - ETL
+
 ---
-## Data Quality in the Lakehouse: Practical Ways to Keep Your Data Trustworthy
+
+# Data Quality in the Lakehouse: Practical Ways to Keep Your Data Trustworthy
 
 In a lakehouse, data comes from many sources and moves through multiple layers before it reaches reports, dashboards or machine learning models. If bad data enters the system, it can silently affect business decisions. That is why data quality is not optional — it must be built into the pipeline.
 

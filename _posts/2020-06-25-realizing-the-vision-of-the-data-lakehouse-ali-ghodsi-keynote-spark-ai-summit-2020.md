@@ -1,5 +1,5 @@
 ---
-title: Why Data Lakes Become Swamps and How the Lakehouse Paradigm Fixes Them
+title: Why Data Lakes Become Swamps and How the Lakehouse Fixes Them
 date: 2020-06-25
 author: Rabindra Jaiswal
 categories:

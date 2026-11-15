@@ -6,7 +6,9 @@ categories:
   - Data Engineering
   - Data Architecture
 
-## How Data Lakehouses Were Built: Spark, Hive and the Databricks Approach
+---
+
+# How Data Lakehouses Were Built: Spark, Hive and the Databricks Approach
 
 Most companies started moving their data to the cloud because they wanted cheap storage and the flexibility to keep all kinds of data — structured, semi-structured, and unstructured. At that time the idea of a **data lakehouse** started becoming popular. This post explains in simple terms how people were building these systems and what Databricks did differently.
 
