@@ -1,0 +1,50 @@
+{
+  "username": "JaisRabin",
+  "data": [
+    {
+      "id": "2123263651088138499",
+      "text": "Multi-Agent Workflows: How to Build AI Systems That Actually Do Business Work\n\nImagine an organization where instead of building one AI agent that does everything, we build multiple specialized agents that work together.\n\nThis is the idea behind Multi-Agent Architecture.\n\nWith",
+      "created_at": "2026-11-19T03:54:37.000Z"
+    },
+    {
+      "id": "2123054435677213126",
+      "text": "Watching Student of the Year After Dark made me wonder about something.\n\nWhy do Indian filmmakers still struggle to make characters speak the way people actually speak in India?\n\nEven in elite colleges, students don't communicate in some artificially polished version of English.",
+      "created_at": "2026-11-18T14:03:16.000Z"
+    },
+    {
+      "id": "2122289919301242917",
+      "text": "Lakeflow Declarative Pipelines: Managed Tables vs External Tables vs Publish Step\n\nImagine you are building a Lakeflow Declarative Pipeline in Azure Databricks.\n\nYour requirement is simple:\n\nYou want to build Bronze → Silver → Gold using Lakeflow, but downstream applications",
+      "created_at": "2026-11-16T11:25:21.000Z"
+    },
+    {
+      "id": "2121978331314679997",
+      "text": "Databricks SDP: Compute Options, All-Purpose Clusters, SQL Warehouse and Materialization\n\nWhen working with Spark Declarative Pipelines (SDP), it is important to understand which compute options are available and when to use them.\n\n1. What compute options can we use?\n\nServerless",
+      "created_at": "2026-11-15T14:47:13.000Z"
+    },
+    {
+      "id": "2121657578744852513",
+      "text": "Databricks just launched its new Always-on Genie.\n\nIt is an AI that stays active all the time and handles complex company work on its own.\n\nData analytics is clearly moving from humans checking numbers all day to machines taking care of it in the background.\n\nGenie understands",
+      "created_at": "2026-11-14T17:32:39.000Z"
+    },
+    {
+      "id": "2121272078662033502",
+      "text": "Databricks Delta Table Optimization: When to use which?\n\n​If you’re running workloads on Databricks, managing file sizes and data layout is critical for both keeping costs low and query speeds blazing fast. But with AUTO OPTIMIZE, explicit OPTIMIZE, and OPTIMIZE ... FULL, it’s",
+      "created_at": "2026-11-13T16:00:49.000Z"
+    },
+    {
+      "id": "2120502939446108246",
+      "text": "Buying property in gurgaon or delhi ncr is nightmare - \nA post is trending on Reddit (r/indianrealestate), and it's raising some serious questions about premium housing in Gurgaon.\n\nA buyer who invested in a Godrej apartment claims that even 6+ months after moving in, they're",
+      "created_at": "2026-11-11T13:04:32.000Z"
+    },
+    {
+      "id": "2119843377076408585",
+      "text": "For four months, an unlabeled plastic container sat untouched on the top shelf of our office fridge.\nInside was a single hard-boiled egg.\n\nNobody threw it out because office etiquette dictates that touching someone else’s food is an act of war.\n\nIt survived four deep-clean",
+      "created_at": "2026-11-09T17:23:40.000Z"
+    },
+    {
+      "id": "2119482146142437700",
+      "text": "https://t.co/BkrurpUxjX",
+      "created_at": "2026-11-08T17:28:16.000Z"
+    }
+  ]
+}

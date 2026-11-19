@@ -27,6 +27,28 @@ Then commit and push. GitHub Pages automatically rebuilds the website, includes 
 5. Replace the sample certification and award entries on the Recent Achievements page with your own details.
 6. For a custom domain, configure it in Settings → Pages and follow GitHub's DNS instructions. If the domain currently hosts something else, use a subdomain such as `resume.example.com` to avoid disrupting it.
 
+## Show recent X posts
+
+The `/tweets/` page reads a static feed updated by GitHub Actions, so the X API bearer token is never sent to visitors' browsers.
+
+For a local test, create a root-level `.env` file (it is ignored by Git) with:
+
+```text
+TWITTER_USERNAME=your_username
+TWITTER_BEARER_TOKEN=your_app_bearer_token
+```
+
+Run `python scripts/fetch_twitter_posts.py` from the repository root. This calls the X API and writes the returned posts to `assets/twitter.json`; serve/build the site afterward to view them. Install dependencies with `pip install -r requirements.txt` if `python-dotenv` is unavailable. Never share the token in chat, commit `.env`, or put the token in page JavaScript.
+
+For scheduled updates after deployment:
+
+1. In repository Settings → Secrets and variables → Actions, add the repository variable `TWITTER_USERNAME` with your X username (without `@`).
+2. Add the repository secret `TWITTER_BEARER_TOKEN` with the app-only bearer token from your X developer app.
+3. Ensure Actions has permission to write repository contents (Settings → Actions → General → Workflow permissions).
+4. Run **Update recent X posts** from the Actions tab once to populate the feed. After that, it refreshes every six hours and commits the feed only when posts change.
+
+The workflow requests the latest 10 original posts, excluding replies and retweets. The X API project must have read access and available quota for the user-lookup and recent-posts endpoints.
+
 ## Notes
 
 - The example post is a placeholder; remove it when you add your own posts.
